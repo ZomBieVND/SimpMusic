@@ -6,7 +6,7 @@ on:
 jobs:
   kotlin-ios:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,28 +19,36 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # 1) Tim noi khai bao target iOS trong cac file gradle
-      - name: Find iOS targets in Gradle files
-        run: |
-          grep -rnE "iosArm64|iosX64|iosSimulatorArm64|ios\(\)" \
-            --include=*.gradle.kts --include=*.gradle --include=*.toml . \
-            | grep -v "/build/" | tee ios-targets.txt || true
-          find . -type d -name "iosMain" -not -path "*/build/*" | tee iosmain-dirs.txt || true
+      # ---- Vá thử nghiệm ngay trong CI (không sửa repo gốc) ----
+      # Thư mục core/ là git submodule nên vá bằng lệnh ở đây cho tiện.
 
-      # 2) Xem cau hinh cua cac module chinh va danh sach module
-      - name: Dump key build files
+      # Vá 1: ktorExt có cùng một 'actual' khai báo ở cả iosMain và iosArm64Main
+      - name: Patch 1 - remove duplicate iosArm64Main in ktorExt
         run: |
-          cp composeApp/build.gradle.kts composeApp-build.gradle.kts.txt || true
-          cp settings.gradle.kts settings.gradle.kts.txt || true
-          ./gradlew -q projects > projects.txt 2>&1 || true
+          find core/service/ktorExt/src -type f | sort > ktorExt-files-before.txt
+          rm -rf core/service/ktorExt/src/iosArm64Main
 
-      # 3) Thu bien dich iOS o MOI module (khong gioi han :composeApp)
-      - name: Compile iOS in all modules that support it
+      # Vá 2: Dispatchers.IO không dùng được trong commonMain khi build cho iOS
+      - name: Patch 2 - Dispatchers.IO -> Dispatchers.Default in domain
+        run: |
+          F=core/domain/src/commonMain/kotlin/com/maxrave/domain/utils/Resource.kt
+          sed -i.bak 's/Dispatchers\.IO/Dispatchers.Default/g' "$F"
+          grep -n "Dispatchers" "$F" > patch2-check.txt || true
+
+      # Vá 3: bật target iOS (đang bị comment) trong composeApp
+      - name: Patch 3 - enable iOS targets in composeApp
+        run: |
+          sed -i.bak '/^\/\/    listOf($/,/^\/\/    }$/ s#^//##' composeApp/build.gradle.kts
+          sed -n '55,75p' composeApp/build.gradle.kts > patch3-check.txt
+          find composeApp/src/iosMain -type f | sort > composeApp-iosMain-files.txt || true
+
+      # ---- Build ----
+      - name: Compile iOS in all modules
         run: ./gradlew compileKotlinIosArm64 --continue 2>&1 | tee build-ios.log
         continue-on-error: true
 
-      - name: Try linking iOS frameworks in all modules
-        run: ./gradlew linkDebugFrameworkIosArm64 --continue 2>&1 | tee build-ios-link.log
+      - name: Link iOS framework of composeApp
+        run: ./gradlew :composeApp:linkDebugFrameworkIosArm64 --continue 2>&1 | tee build-ios-link.log
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
@@ -48,10 +56,9 @@ jobs:
         with:
           name: ios-build-logs
           path: |
-            ios-targets.txt
-            iosmain-dirs.txt
-            composeApp-build.gradle.kts.txt
-            settings.gradle.kts.txt
-            projects.txt
+            ktorExt-files-before.txt
+            patch2-check.txt
+            patch3-check.txt
+            composeApp-iosMain-files.txt
             build-ios.log
             build-ios-link.log
