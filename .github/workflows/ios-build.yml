@@ -1,0 +1,67 @@
+name: iOS build (experimental)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  kotlin-ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Buoc 1: liet ke cac task iOS that su co trong repo
+      - name: List iOS-related Gradle tasks
+        run: ./gradlew tasks --all | grep -i ios | tee ios-tasks.txt || true
+
+      # Buoc 2: thu bien dich framework iOS (--continue de thay het loi mot lan)
+      # Neu ten task khac, sua lai theo ios-tasks.txt
+      - name: Try linking iOS framework
+        run: ./gradlew :composeApp:linkDebugFrameworkIosArm64 --continue --stacktrace 2>&1 | tee build-ios.log
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-build-logs
+          path: |
+            ios-tasks.txt
+            build-ios.log
+            **/build/reports/**
+
+  # Buoc 3 (chi bat khi da co thu muc iosApp/ voi file .xcodeproj):
+  # xcode-ipa:
+  #   needs: kotlin-ios
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - uses: actions/setup-java@v4
+  #       with:
+  #         distribution: temurin
+  #         java-version: 21
+  #     - name: Build unsigned app
+  #       run: |
+  #         xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp \
+  #           -configuration Release -sdk iphoneos \
+  #           -derivedDataPath build \
+  #           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+  #     - name: Package IPA
+  #       run: |
+  #         mkdir Payload
+  #         cp -R build/Build/Products/Release-iphoneos/*.app Payload/
+  #         zip -r SimpMusic-unsigned.ipa Payload
+  #     - uses: actions/upload-artifact@v4
+  #       with:
+  #         name: SimpMusic-unsigned-ipa
+  #         path: SimpMusic-unsigned.ipa
