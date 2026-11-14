@@ -19,14 +19,28 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # Buoc 1: liet ke cac task iOS that su co trong repo
-      - name: List iOS-related Gradle tasks
-        run: ./gradlew tasks --all | grep -i ios | tee ios-tasks.txt || true
+      # 1) Tim noi khai bao target iOS trong cac file gradle
+      - name: Find iOS targets in Gradle files
+        run: |
+          grep -rnE "iosArm64|iosX64|iosSimulatorArm64|ios\(\)" \
+            --include=*.gradle.kts --include=*.gradle --include=*.toml . \
+            | grep -v "/build/" | tee ios-targets.txt || true
+          find . -type d -name "iosMain" -not -path "*/build/*" | tee iosmain-dirs.txt || true
 
-      # Buoc 2: thu bien dich framework iOS (--continue de thay het loi mot lan)
-      # Neu ten task khac, sua lai theo ios-tasks.txt
-      - name: Try linking iOS framework
-        run: ./gradlew :composeApp:linkDebugFrameworkIosArm64 --continue --stacktrace 2>&1 | tee build-ios.log
+      # 2) Xem cau hinh cua cac module chinh va danh sach module
+      - name: Dump key build files
+        run: |
+          cp composeApp/build.gradle.kts composeApp-build.gradle.kts.txt || true
+          cp settings.gradle.kts settings.gradle.kts.txt || true
+          ./gradlew -q projects > projects.txt 2>&1 || true
+
+      # 3) Thu bien dich iOS o MOI module (khong gioi han :composeApp)
+      - name: Compile iOS in all modules that support it
+        run: ./gradlew compileKotlinIosArm64 --continue 2>&1 | tee build-ios.log
+        continue-on-error: true
+
+      - name: Try linking iOS frameworks in all modules
+        run: ./gradlew linkDebugFrameworkIosArm64 --continue 2>&1 | tee build-ios-link.log
         continue-on-error: true
 
       - uses: actions/upload-artifact@v4
@@ -34,34 +48,10 @@ jobs:
         with:
           name: ios-build-logs
           path: |
-            ios-tasks.txt
+            ios-targets.txt
+            iosmain-dirs.txt
+            composeApp-build.gradle.kts.txt
+            settings.gradle.kts.txt
+            projects.txt
             build-ios.log
-            **/build/reports/**
-
-  # Buoc 3 (chi bat khi da co thu muc iosApp/ voi file .xcodeproj):
-  # xcode-ipa:
-  #   needs: kotlin-ios
-  #   runs-on: macos-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         submodules: recursive
-  #     - uses: actions/setup-java@v4
-  #       with:
-  #         distribution: temurin
-  #         java-version: 21
-  #     - name: Build unsigned app
-  #       run: |
-  #         xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp \
-  #           -configuration Release -sdk iphoneos \
-  #           -derivedDataPath build \
-  #           CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
-  #     - name: Package IPA
-  #       run: |
-  #         mkdir Payload
-  #         cp -R build/Build/Products/Release-iphoneos/*.app Payload/
-  #         zip -r SimpMusic-unsigned.ipa Payload
-  #     - uses: actions/upload-artifact@v4
-  #       with:
-  #         name: SimpMusic-unsigned-ipa
-  #         path: SimpMusic-unsigned.ipa
+            build-ios-link.log
